@@ -6,7 +6,12 @@ authors = ["armandpl <adpl33@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = ">=3.9"
+scipy = "^1.11.4"
+jupyter = "^1.0.0"
+ipykernel = "^6.28.0"
+matplotlib = "^3.8.2"
+tqdm = "^4.66.1"
 
 
 [build-system]
