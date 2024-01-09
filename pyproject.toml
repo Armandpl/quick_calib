@@ -12,6 +12,12 @@ jupyter = "^1.0.0"
 ipykernel = "^6.28.0"
 matplotlib = "^3.8.2"
 tqdm = "^4.66.1"
+kornia = "^0.7.1"
+torch = "^2.1.2"
+opencv-python = "^4.9.0.80"
+torchvision = "^0.16.2"
+numpy = "^1.26.3"
+pre-commit = "^3.6.0"
 
 
 [build-system]
