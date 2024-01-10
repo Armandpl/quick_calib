@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 
 import cv2
@@ -26,26 +27,46 @@ def compute_EE(roll, pitch, yaw, tx, ty, tz):
     R = RC.T
     T = -R @ C
     E = np.eye(4)
-    # E = np.eye(4)
     E[:3, :3] = R
     E[:3, 3] = T
     return E.astype(np.float32)
 
 
-def make_lane_lines(nb=4, len=500, width=3.65):
+def make_lane_lines(
+    nb=4, len=500, width=3.65, p_dotted: float = 0.5, dot_len: float = 3, dot_gap: float = 3
+):
     """Returns a list of lane lines on the road plane.
 
     Each lane line is a tuple of two points representing the start and end of the line. Half of the
     lines are on the left side of the road, half on the right side. They are spaced by width. So
-    the first right lane is just width/2 to the right of the origin. Lanes are paralel to the x
+    the first right lane is just width/2 to the right of the origin. Lanes are parallel to the x
     axis (forward). They are of length len.
     """
+    # randomy sample a number between 1 and nb
+    nb = random.randint(1, nb)
     lane_lines = []
     for i in range(nb):
         y = -width / 2 - width * (nb // 2 - 1) + i * width
         x_start = 0
         x_end = len
-        lane_lines.append(((x_start, y), (x_end, y)))
+
+        # Randomly determine if the lane line should be dotted
+        is_dotted = random.random() < p_dotted
+
+        if is_dotted:
+            # Calculate the number of dots based on the length and dot length/gap
+            num_dots = int(len / (dot_len + dot_gap))
+
+            # Calculate the dot positions
+            dot_positions = [(x_start + i * (dot_len + dot_gap), y) for i in range(num_dots)]
+
+            # Create the dotted line by connecting the dots
+            for j in range(0, num_dots - 1, 2):
+                lane_lines.append((dot_positions[j], dot_positions[j + 1]))
+        else:
+            # Create a solid line
+            lane_lines.append(((x_start, y), (x_end, y)))
+
     return lane_lines
 
 
@@ -64,7 +85,7 @@ def make_lane_lines_vertices(lane_lines, line_width=0.15):
     return lane_line_vertices
 
 
-def make_image(roll, pitch, yaw, tx, ty, tz):
+def make_image(roll, pitch, yaw, tx, ty, tz, max_nb_lines):
     EE2 = compute_EE(
         roll,
         pitch,
@@ -92,34 +113,44 @@ def make_image(roll, pitch, yaw, tx, ty, tz):
         width=torch.tensor([IMAGE_W]),
     )
 
-    lane_lines = make_lane_lines(nb=6)
-    for vertices in make_lane_lines_vertices(lane_lines):
-        points_to_project = np.array(vertices)
-        points_to_project = np.concatenate(
-            [points_to_project, np.zeros((points_to_project.shape[0], 1))], axis=1
-        )
-        points_to_project = torch.from_numpy(points_to_project).to(torch.float32)
-        P = camera.intrinsics @ camera.extrinsics
-        homogeneous_points = transform_points(P, points_to_project)
+    # TODO hack: if nothing is drawn, re-gen
+    nb_drawn = 0
 
-        # if points are behind the camera, discard them
-        homogeneous_points = homogeneous_points[homogeneous_points[..., 2] > 0]
+    while nb_drawn < 1:
+        lane_lines = make_lane_lines(nb=max_nb_lines)
+        for vertices in make_lane_lines_vertices(lane_lines):
+            points_to_project = np.array(vertices)
+            points_to_project = np.concatenate(
+                [points_to_project, np.zeros((points_to_project.shape[0], 1))], axis=1
+            )
+            points_to_project = torch.from_numpy(points_to_project).to(torch.float32)
+            P = camera.intrinsics @ camera.extrinsics
+            homogeneous_points = transform_points(P, points_to_project)
 
-        points_to_plot = convert_points_from_homogeneous(homogeneous_points)
-        # append last point to close the polygon
-        points_to_plot = torch.cat([points_to_plot, points_to_plot[0].unsqueeze(0)], dim=0)
-        # convert to int
-        points_to_plot = points_to_plot.int()
+            # if any of the vertices of the line or line segment are behind the camera
+            # our current projectin will fail so we don't draw the line
+            if torch.any(homogeneous_points[..., 2] < 0):
+                continue
+            else:
+                nb_drawn += 1
 
-        for i in range(points_to_plot.shape[0] - 1):
-            p1 = points_to_plot[i].tolist()
-            p2 = points_to_plot[i + 1].tolist()
-            cv2.line(image, p1, p2, (255, 255, 255), 1)
+            points_to_plot = convert_points_from_homogeneous(homogeneous_points)
+            # append last point to close the polygon
+            points_to_plot = torch.cat([points_to_plot, points_to_plot[0].unsqueeze(0)], dim=0)
+            # convert to int
+            points_to_plot = points_to_plot.int()
+
+            for i in range(points_to_plot.shape[0] - 1):
+                p1 = points_to_plot[i].tolist()
+                p2 = points_to_plot[i + 1].tolist()
+                cv2.line(image, p1, p2, (255, 255, 255), 1)
 
     return image
 
 
-def gen(output_dir: Path, max_pitch, max_yaw, max_ty, max_tz, nb_images):
+def gen(root_dir: Path, max_pitch, max_yaw, max_ty, max_tz, nb_images, max_nb_lines):
+    root_dir.mkdir(exist_ok=False)
+    output_dir = root_dir / "canny/"
     output_dir.mkdir(exist_ok=False)
 
     # gen labels
@@ -130,7 +161,7 @@ def gen(output_dir: Path, max_pitch, max_yaw, max_ty, max_tz, nb_images):
         high=[max_pitch, max_yaw, max_ty, max_tz],
         size=(nb_images, 4),
     )
-    np.save(output_dir / "labels.npy", labels)
+    np.save(root_dir / "labels.npy", labels)
 
     # 'hack' so that camera is in a place where we don't get too many glitches
     # glithes happend when points are behind the camera
@@ -142,7 +173,7 @@ def gen(output_dir: Path, max_pitch, max_yaw, max_ty, max_tz, nb_images):
 
     for idx in trange(nb_images):
         pitch, yaw, ty, tz = labels[idx]
-        image = make_image(0, pitch, yaw, init_tx, init_ty + ty, init_tz + tz)
+        image = make_image(0, pitch, yaw, init_tx, init_ty + ty, init_tz + tz, max_nb_lines)
         cv2.imwrite(str(output_dir / f"{idx}.png"), image)
 
 
@@ -155,7 +186,7 @@ def viz():
     roll = 0
 
     while True:
-        cv2.imshow("synth road", make_image(roll, pitch, yaw, forward, right, down))
+        cv2.imshow("synth road", make_image(roll, pitch, yaw, forward, right, down, MAX_NB_LINES))
 
         # Listen for key presses
         key = cv2.waitKey(0) & 0xFF
@@ -194,16 +225,17 @@ def viz():
     cv2.destroyAllWindows()
 
 
-DEBUG = False
+DEBUG = False  # launch viz
 OUTPUT_DIR = Path("../data/synth_road")
 NB_IMAGES = 500
 MAX_PITCH = np.deg2rad(20)
 MAX_YAW = np.deg2rad(20)
 MAX_TY = 2.5
 MAX_TZ = 1.5
+MAX_NB_LINES = 6
 
 if __name__ == "__main__":
     if DEBUG:
         viz()
     else:
-        gen(OUTPUT_DIR, MAX_PITCH, MAX_YAW, MAX_TY, MAX_TZ, NB_IMAGES)
+        gen(OUTPUT_DIR, MAX_PITCH, MAX_YAW, MAX_TY, MAX_TZ, NB_IMAGES, MAX_NB_LINES)
