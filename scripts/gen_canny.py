@@ -227,7 +227,7 @@ def viz():
 
 DEBUG = False  # launch viz
 OUTPUT_DIR = Path("../data/synth_road")
-NB_IMAGES = 500
+NB_IMAGES = 5_000
 MAX_PITCH = np.deg2rad(20)
 MAX_YAW = np.deg2rad(20)
 MAX_TY = 2.5
